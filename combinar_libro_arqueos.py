@@ -18,6 +18,7 @@ import argparse
 import sys
 from pathlib import Path
 from typing import Any
+import datetime as dt
 
 try:
     import openpyxl
@@ -88,6 +89,11 @@ def extract_arqueos(arqueos_path: Path) -> list[dict[str, Any]]:
     ]
 
 
+def weekday_name(date_text: str) -> str:
+    weekdays = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+    return weekdays[dt.date.fromisoformat(date_text).weekday()]
+
+
 def validate_same_dates(libro_rows: list[dict[str, Any]], arqueo_rows: list[dict[str, Any]]) -> None:
     libro_dates = [str(row["fecha"]) for row in libro_rows]
     arqueo_dates = [str(row["fecha"]) for row in arqueo_rows]
@@ -95,6 +101,15 @@ def validate_same_dates(libro_rows: list[dict[str, Any]], arqueo_rows: list[dict
     arqueo_set = set(arqueo_dates)
 
     if libro_set == arqueo_set and libro_dates[0] == arqueo_dates[0] and libro_dates[-1] == arqueo_dates[-1]:
+        return
+
+    if len(libro_rows) == len(arqueo_rows):
+        # El Libro de Caja no incluye fecha por bloque; solo periodo inicial/final.
+        # Si el numero de bloques coincide, usamos las fechas reales de cierre de arqueos.
+        for libro_row, arqueo_row in zip(libro_rows, arqueo_rows):
+            date_text = str(arqueo_row["fecha"])
+            libro_row["fecha"] = date_text
+            libro_row["dia_semana"] = weekday_name(date_text)
         return
 
     missing_in_arqueos = sorted(libro_set - arqueo_set)
@@ -261,6 +276,8 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
 
 
 

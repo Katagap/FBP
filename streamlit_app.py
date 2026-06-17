@@ -327,8 +327,8 @@ st.markdown(
     }
     div[data-testid="stButton"]:has(button:not([kind="primary"])) {
         width: 34px;
-        height: 0;
-        margin-top: -106px;
+        height: 34px;
+        margin-top: -105px;
         margin-left: calc(100% - 54px);
         position: relative;
         z-index: 20;
@@ -340,8 +340,19 @@ st.markdown(
         min-height: 34px !important;
         padding: 0 !important;
         border-radius: 999px !important;
-        opacity: 0 !important;
+        background: #FDE8E8 !important;
+        border: 1px solid #F8B4B4 !important;
+        color: #C81E1E !important;
+        font-size: 1.15rem !important;
+        font-weight: 900 !important;
+        line-height: 1 !important;
         cursor: pointer !important;
+        box-shadow: none !important;
+    }
+    div[data-testid="stButton"] button:not([kind="primary"]):hover {
+        background: #FBD5D5 !important;
+        border-color: #F05252 !important;
+        color: #9B1C1C !important;
     }
     div[data-testid="stButton"] button[kind="primary"],
     div[data-testid="stDownloadButton"] button[kind="primary"] {
@@ -591,6 +602,7 @@ if st.session_state.combined_df is not None and st.session_state.combined_xlsx i
         type="primary",
         use_container_width=True,
     )
+
 
 
 
