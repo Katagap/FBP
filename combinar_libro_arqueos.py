@@ -40,6 +40,18 @@ OUTPUT_COLUMNS = [
     "Saldo Teorico",
     "Descuadre",
 ]
+MONEY_COLUMNS = {
+    "Ingresos Tarjeta",
+    "Ingresos Banco",
+    "Ingresos Efectivo",
+    "Salidas",
+    "Retiradas Efectivo",
+    "Saldo Real",
+    "Saldo Teorico",
+    "Descuadre",
+}
+TOTAL_COLUMNS = MONEY_COLUMNS - {"Saldo Real", "Saldo Teorico"}
+EURO_SYMBOL = chr(8364)
 
 
 def parse_args() -> argparse.Namespace:
@@ -223,7 +235,7 @@ def combine_rows(
     return combined
 
 
-def write_xlsx(records: list[dict[str, Any]], output_path: Path) -> None:
+def _write_xlsx_legacy(records: list[dict[str, Any]], output_path: Path) -> None:
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Resumen final"
@@ -293,6 +305,120 @@ def write_xlsx(records: list[dict[str, Any]], output_path: Path) -> None:
         ws.column_dimensions[col_cells[0].column_letter].width = min(max(width, 13), 24)
 
     # Borde exterior algo mas marcado alrededor de toda la tabla.
+    min_row, max_row = 1, ws.max_row
+    min_col, max_col = 1, ws.max_column
+    for col in range(min_col, max_col + 1):
+        top_cell = ws.cell(min_row, col)
+        bottom_cell = ws.cell(max_row, col)
+        top_cell.border = openpyxl.styles.Border(
+            left=top_cell.border.left,
+            right=top_cell.border.right,
+            top=medium_side,
+            bottom=top_cell.border.bottom,
+        )
+        bottom_cell.border = openpyxl.styles.Border(
+            left=bottom_cell.border.left,
+            right=bottom_cell.border.right,
+            top=bottom_cell.border.top,
+            bottom=medium_side,
+        )
+    for row in range(min_row, max_row + 1):
+        left_cell = ws.cell(row, min_col)
+        right_cell = ws.cell(row, max_col)
+        left_cell.border = openpyxl.styles.Border(
+            left=medium_side,
+            right=left_cell.border.right,
+            top=left_cell.border.top,
+            bottom=left_cell.border.bottom,
+        )
+        right_cell.border = openpyxl.styles.Border(
+            left=right_cell.border.left,
+            right=medium_side,
+            top=right_cell.border.top,
+            bottom=right_cell.border.bottom,
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(output_path)
+
+
+def write_xlsx(records: list[dict[str, Any]], output_path: Path) -> None:
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Resumen final"
+    ws.append(OUTPUT_COLUMNS)
+    for record in records:
+        ws.append([record.get(col, "") for col in OUTPUT_COLUMNS])
+
+    data_start_row = 2
+    data_end_row = ws.max_row
+    total_row = ws.max_row + 1
+    ws.append(["" for _ in OUTPUT_COLUMNS])
+    ws.cell(total_row, 1).value = "TOTAL"
+    if records:
+        for column_name in TOTAL_COLUMNS:
+            col_idx = OUTPUT_COLUMNS.index(column_name) + 1
+            col_letter = openpyxl.utils.get_column_letter(col_idx)
+            ws.cell(total_row, col_idx).value = f"=SUM({col_letter}{data_start_row}:{col_letter}{data_end_row})"
+
+    header_fill = openpyxl.styles.PatternFill("solid", fgColor="1F4E78")
+    header_font = openpyxl.styles.Font(bold=True, color="FFFFFF")
+    alt_fill = openpyxl.styles.PatternFill("solid", fgColor="F2F2F2")
+    total_fill = openpyxl.styles.PatternFill("solid", fgColor="DDF6F7")
+    thin_side = openpyxl.styles.Side(style="thin", color="A6A6A6")
+    medium_side = openpyxl.styles.Side(style="medium", color="5B5B5B")
+    thin_border = openpyxl.styles.Border(
+        left=thin_side,
+        right=thin_side,
+        top=thin_side,
+        bottom=thin_side,
+    )
+    euro_format = f"#,##0.00 {EURO_SYMBOL}"
+
+    ws.row_dimensions[1].height = 36
+    for cell in ws[1]:
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.border = thin_border
+        cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ws.freeze_panes = "A2"
+    last_col_letter = openpyxl.utils.get_column_letter(ws.max_column)
+    ws.auto_filter.ref = f"A1:{last_col_letter}{data_end_row}"
+
+    descuadre_col = OUTPUT_COLUMNS.index("Descuadre") + 1
+    for row in range(2, ws.max_row + 1):
+        if row % 2 == 0 and row != total_row:
+            for col in range(1, ws.max_column + 1):
+                ws.cell(row, col).fill = alt_fill
+        for col in range(1, ws.max_column + 1):
+            cell = ws.cell(row, col)
+            cell.border = thin_border
+            cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+            if OUTPUT_COLUMNS[col - 1] in MONEY_COLUMNS:
+                cell.number_format = euro_format
+        descuadre_cell = ws.cell(row, descuadre_col)
+        if isinstance(descuadre_cell.value, (int, float)):
+            if descuadre_cell.value < 0:
+                descuadre_cell.font = openpyxl.styles.Font(color="C00000")
+            elif descuadre_cell.value > 0:
+                descuadre_cell.font = openpyxl.styles.Font(color="008000")
+
+    for cell in ws[total_row]:
+        cell.fill = total_fill
+        cell.font = openpyxl.styles.Font(bold=True, color="071833")
+        cell.border = thin_border
+        cell.alignment = openpyxl.styles.Alignment(horizontal="center", vertical="center")
+        if OUTPUT_COLUMNS[cell.column - 1] in MONEY_COLUMNS:
+            cell.number_format = euro_format
+
+    for row in range(2, ws.max_row + 1):
+        ws.row_dimensions[row].height = 22 if row == total_row else 20
+
+    for col_cells in ws.columns:
+        width = max(len(str(cell.value or "")) for cell in col_cells) + 2
+        ws.column_dimensions[col_cells[0].column_letter].width = min(max(width, 13), 24)
+
     min_row, max_row = 1, ws.max_row
     min_col, max_col = 1, ws.max_column
     for col in range(min_col, max_col + 1):

@@ -393,6 +393,8 @@ MONEY_COLUMNS = [
     "Saldo Teorico",
     "Descuadre",
 ]
+EURO_SYMBOL = chr(8364)
+TOTAL_COLUMNS = [column for column in MONEY_COLUMNS if column not in {"Saldo Real", "Saldo Teorico"}]
 
 
 def clear_combined_result() -> None:
@@ -443,16 +445,16 @@ def file_card(kind: str, stored_file: dict[str, Any]) -> None:
                 <div class="file-icon">{extension}</div>
                 <div>
                     <div class="file-name">{stored_file['name']}</div>
-                    <div class="file-meta">{size_kb:.1f} KB Â· archivo cargado</div>
+                    <div class="file-meta">{size_kb:.1f} KB &middot; archivo cargado</div>
                 </div>
             </div>
-            <span class="remove-cross" title="Quitar archivo">Ã—</span>
+            <span class="remove-cross" title="Quitar archivo">&times;</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.button(
-        "Ã—",
+        "×",
         key=f"remove_{kind}",
         help="Quitar archivo",
         on_click=reset_upload,
@@ -487,11 +489,22 @@ def build_combined_workbook(libro_file: Any, arqueos_file: Any, banco_file: Any 
         return df, output_path.read_bytes()
 
 
+def add_total_row_to_preview(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    total_row = {column: "" for column in df.columns}
+    total_row["Fecha"] = "TOTAL"
+    for column in TOTAL_COLUMNS:
+        if column in df.columns:
+            total_row[column] = pd.to_numeric(df[column], errors="coerce").fillna(0).sum()
+    return pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
+
+
 def format_money_value(value: Any) -> str:
     if pd.isna(value):
         return "-"
     try:
-        return f"{float(value):,.2f} €"
+        return f"{float(value):,.2f} {EURO_SYMBOL}"
     except (TypeError, ValueError):
         return "-"
 
@@ -510,6 +523,12 @@ def descuadre_color(value: Any) -> str:
     return ""
 
 
+def total_row_style(row: pd.Series) -> list[str]:
+    if row.get("Fecha") == "TOTAL":
+        return ["background-color: #DDF6F7; font-weight: 800; color: #071833" for _ in row]
+    return ["" for _ in row]
+
+
 def format_preview(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     styles = []
     for column in df.columns:
@@ -524,6 +543,7 @@ def format_preview(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     styler = df.style.format(money_formatters)
     if "Descuadre" in df.columns:
         styler = styler.map(descuadre_color, subset=["Descuadre"])
+    styler = styler.apply(total_row_style, axis=1)
     return styler.set_table_styles(styles)
 
 
@@ -537,7 +557,7 @@ st.markdown(
     </div>
     <div class="hero-wrap">
         <div class="hero-copy">
-            <div class="result-pill"><span class="pill-dot">âœ“</span> Preparado para combinar</div>
+            <div class="result-pill"><span class="pill-dot">&#10003;</span> Preparado para combinar</div>
             <div class="app-title">Libro de caja y arqueos</div>
             <div class="app-subtitle">Sube los dos archivos del mismo periodo, valida que las fechas encajan y descarga un Excel final con formato listo para revisar.</div>
         </div>
@@ -637,7 +657,7 @@ if combine_disabled:
 
 if st.session_state.combined_df is not None and st.session_state.combined_xlsx is not None:
     st.subheader("Vista previa")
-    preview_df = st.session_state.combined_df.copy()
+    preview_df = add_total_row_to_preview(st.session_state.combined_df.copy())
     st.dataframe(
         format_preview(preview_df),
         use_container_width=True,
