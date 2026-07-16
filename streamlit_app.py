@@ -385,6 +385,7 @@ st.markdown(
 )
 MONEY_COLUMNS = [
     "Ingresos Tarjeta",
+    "Ingresos Banco",
     "Ingresos Efectivo",
     "Salidas",
     "Retiradas Efectivo",
@@ -442,16 +443,16 @@ def file_card(kind: str, stored_file: dict[str, Any]) -> None:
                 <div class="file-icon">{extension}</div>
                 <div>
                     <div class="file-name">{stored_file['name']}</div>
-                    <div class="file-meta">{size_kb:.1f} KB · archivo cargado</div>
+                    <div class="file-meta">{size_kb:.1f} KB Â· archivo cargado</div>
                 </div>
             </div>
-            <span class="remove-cross" title="Quitar archivo">×</span>
+            <span class="remove-cross" title="Quitar archivo">Ã—</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
     st.button(
-        "×",
+        "Ã—",
         key=f"remove_{kind}",
         help="Quitar archivo",
         on_click=reset_upload,
@@ -466,16 +467,18 @@ def save_uploaded_file(uploaded_file: dict[str, Any], folder: Path, filename: st
     return path
 
 
-def build_combined_workbook(libro_file: Any, arqueos_file: Any) -> tuple[pd.DataFrame, bytes]:
+def build_combined_workbook(libro_file: Any, arqueos_file: Any, banco_file: Any | None = None) -> tuple[pd.DataFrame, bytes]:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         libro_path = save_uploaded_file(libro_file, tmp_path, "libro_caja")
         arqueos_path = save_uploaded_file(arqueos_file, tmp_path, "arqueos")
+        banco_path = save_uploaded_file(banco_file, tmp_path, "banco") if banco_file else None
 
         libro_rows = combinador.extract_libro(libro_path)
         arqueo_rows = combinador.extract_arqueos(arqueos_path)
+        banco_by_date = combinador.extract_banco(banco_path) if banco_path else None
         combinador.validate_same_dates(libro_rows, arqueo_rows)
-        combined_rows = combinador.combine_rows(libro_rows, arqueo_rows)
+        combined_rows = combinador.combine_rows(libro_rows, arqueo_rows, banco_by_date)
 
         output_path = tmp_path / "resumen_final_caja_arqueos.xlsx"
         combinador.write_xlsx(combined_rows, output_path)
@@ -495,7 +498,7 @@ def format_preview(df: pd.DataFrame) -> pd.io.formats.style.Styler:
                 }
             )
     return (
-        df.style.format({column: "{:,.2f} €" for column in MONEY_COLUMNS})
+        df.style.format({column: "{:,.2f} â‚¬" for column in MONEY_COLUMNS})
         .map(lambda value: "color: #b42318; font-weight: 700" if value < 0 else "color: #027a48; font-weight: 700" if value > 0 else "", subset=["Descuadre"])
         .set_table_styles(styles)
     )
@@ -511,7 +514,7 @@ st.markdown(
     </div>
     <div class="hero-wrap">
         <div class="hero-copy">
-            <div class="result-pill"><span class="pill-dot">✓</span> Preparado para combinar</div>
+            <div class="result-pill"><span class="pill-dot">âœ“</span> Preparado para combinar</div>
             <div class="app-title">Libro de caja y arqueos</div>
             <div class="app-subtitle">Sube los dos archivos del mismo periodo, valida que las fechas encajan y descarga un Excel final con formato listo para revisar.</div>
         </div>
@@ -526,17 +529,21 @@ if "libro_upload_nonce" not in st.session_state:
     st.session_state.libro_upload_nonce = 0
 if "arqueos_upload_nonce" not in st.session_state:
     st.session_state.arqueos_upload_nonce = 0
+if "banco_upload_nonce" not in st.session_state:
+    st.session_state.banco_upload_nonce = 0
 if "libro_file" not in st.session_state:
     st.session_state.libro_file = None
 if "arqueos_file" not in st.session_state:
     st.session_state.arqueos_file = None
+if "banco_file" not in st.session_state:
+    st.session_state.banco_file = None
 if "combined_df" not in st.session_state:
     st.session_state.combined_df = None
 if "combined_xlsx" not in st.session_state:
     st.session_state.combined_xlsx = None
 
 
-left, right = st.columns(2, gap="large")
+left, middle, right = st.columns(3, gap="large")
 with left:
     upload_header("Libro de caja", st.session_state.libro_file)
     if st.session_state.libro_file:
@@ -550,7 +557,7 @@ with left:
             label_visibility="collapsed",
         )
         store_uploaded_file("libro", uploaded_libro)
-with right:
+with middle:
     upload_header("Arqueos", st.session_state.arqueos_file)
     if st.session_state.arqueos_file:
         file_card("arqueos", st.session_state.arqueos_file)
@@ -563,19 +570,39 @@ with right:
             label_visibility="collapsed",
         )
         store_uploaded_file("arqueos", uploaded_arqueos)
+with right:
+    upload_header("Banco tarjetas", st.session_state.banco_file)
+    if st.session_state.banco_file:
+        file_card("banco", st.session_state.banco_file)
+    else:
+        uploaded_banco = st.file_uploader(
+            "Banco tarjetas",
+            type=["xls", "xlsx"],
+            key=f"banco_file_uploader_{st.session_state.banco_upload_nonce}",
+            help="Excel del banco con remesas liquidadas. Se desplaza un dia hacia atras.",
+            label_visibility="collapsed",
+        )
+        store_uploaded_file("banco", uploaded_banco)
 
 st.divider()
 
 libro_file = st.session_state.libro_file
 arqueos_file = st.session_state.arqueos_file
+banco_file = st.session_state.banco_file
 combine_disabled = libro_file is None or arqueos_file is None
 if st.button("Combinar", type="primary", disabled=combine_disabled, use_container_width=True):
     try:
         with st.spinner("Validando fechas y creando Excel final..."):
-            df, xlsx_bytes = build_combined_workbook(libro_file, arqueos_file)
+            df, xlsx_bytes = build_combined_workbook(libro_file, arqueos_file, banco_file)
             st.session_state.combined_df = df
             st.session_state.combined_xlsx = xlsx_bytes
         st.success(f"Combinado correctamente: {len(df)} dias.")
+        if banco_file is not None and "Ingresos Banco" in df.columns:
+            matched_bank_days = int(df["Ingresos Banco"].notna().sum())
+            if matched_bank_days == 0:
+                st.warning("El Excel del banco se ha leido, pero sus fechas no coinciden con las fechas de arqueos de este periodo.")
+            elif matched_bank_days < len(df):
+                st.warning(f"El banco solo tiene importes para {matched_bank_days} de {len(df)} dias del periodo.")
     except Exception as exc:
         st.session_state.combined_df = None
         st.session_state.combined_xlsx = None
@@ -583,7 +610,7 @@ if st.button("Combinar", type="primary", disabled=combine_disabled, use_containe
         st.code(str(exc), language="text")
 
 if combine_disabled:
-    st.info("Sube los dos archivos para activar el boton de combinar.")
+    st.info("Sube libro de caja y arqueos para activar el boton de combinar. El banco es opcional.")
 
 if st.session_state.combined_df is not None and st.session_state.combined_xlsx is not None:
     st.subheader("Vista previa")
@@ -602,6 +629,7 @@ if st.session_state.combined_df is not None and st.session_state.combined_xlsx i
         type="primary",
         use_container_width=True,
     )
+
 
 
 

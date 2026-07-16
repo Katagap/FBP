@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 Combina el resumen del libro de caja con el resumen de arqueos.
 
@@ -32,6 +32,7 @@ OUTPUT_COLUMNS = [
     "Fecha",
     "Dia Semana",
     "Ingresos Tarjeta",
+    "Ingresos Banco",
     "Ingresos Efectivo",
     "Salidas",
     "Retiradas Efectivo",
@@ -52,6 +53,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--arqueos",
         help="Excel/CSV de arqueos. Si se omite, usa el arqueos*.xlsx mas reciente de esta carpeta o Downloads.",
+    )
+    parser.add_argument(
+        "--banco",
+        help="Excel .xls/.xlsx del banco con remesas liquidadas. Sus fechas se desplazan un dia hacia atras.",
     )
     parser.add_argument(
         "-o",
@@ -87,6 +92,71 @@ def extract_arqueos(arqueos_path: Path) -> list[dict[str, Any]]:
         }
         for record in records
     ]
+
+
+def parse_bank_amount(value: Any) -> float:
+    if value is None or value == "":
+        return 0.0
+    if isinstance(value, (int, float)):
+        return round(float(value), 2)
+    text = str(value).strip().replace(" EUR", "")
+    if "," in text and "." in text:
+        text = text.replace(".", "").replace(",", ".")
+    elif "," in text:
+        text = text.replace(",", ".")
+    return round(float(text), 2)
+
+
+def parse_bank_date(value: Any) -> dt.date:
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    text = str(value).strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return dt.datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+    raise ValueError(f"No he podido leer la fecha del banco: {value!r}")
+
+
+def normalize_bank_header(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def extract_banco(banco_path: Path) -> dict[str, float]:
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise ImportError("Falta pandas/xlrd para leer el Excel del banco. Instala: python -m pip install -r requirements.txt") from exc
+
+    raw = pd.read_excel(banco_path, sheet_name=0, header=None)
+    header_row = None
+    for idx, row in raw.iterrows():
+        labels = [normalize_bank_header(value) for value in row.tolist()]
+        if "FECHA" in labels and "FACTURACIÓN" in labels:
+            header_row = idx
+            break
+    if header_row is None:
+        raise ValueError("No encuentro la tabla del banco con columnas FECHA y FACTURACIÓN.")
+
+    headers = [normalize_bank_header(value) for value in raw.iloc[header_row].tolist()]
+    date_col = headers.index("FECHA")
+    amount_col = headers.index("FACTURACIÓN")
+    type_col = headers.index("TIPOLOGÍA") if "TIPOLOGÍA" in headers else None
+
+    grouped: dict[str, float] = {}
+    for _, row in raw.iloc[header_row + 1 :].iterrows():
+        if pd.isna(row[date_col]):
+            continue
+        if type_col is not None and normalize_bank_header(row[type_col]) != "TARJETA":
+            continue
+        bank_date = parse_bank_date(row[date_col])
+        sale_date = bank_date - dt.timedelta(days=1)
+        key = sale_date.isoformat()
+        grouped[key] = round(grouped.get(key, 0.0) + parse_bank_amount(row[amount_col]), 2)
+    return grouped
 
 
 def weekday_name(date_text: str) -> str:
@@ -126,7 +196,11 @@ def validate_same_dates(libro_rows: list[dict[str, Any]], arqueo_rows: list[dict
     raise ValueError("\n".join(details))
 
 
-def combine_rows(libro_rows: list[dict[str, Any]], arqueo_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def combine_rows(
+    libro_rows: list[dict[str, Any]],
+    arqueo_rows: list[dict[str, Any]],
+    banco_by_date: dict[str, float] | None = None,
+) -> list[dict[str, Any]]:
     arqueos_by_date = {str(row["fecha"]): row for row in arqueo_rows}
     combined = []
     for libro_row in libro_rows:
@@ -137,6 +211,7 @@ def combine_rows(libro_rows: list[dict[str, Any]], arqueo_rows: list[dict[str, A
                 "Fecha": libro_row.get("fecha", ""),
                 "Dia Semana": libro_row.get("dia_semana", ""),
                 "Ingresos Tarjeta": libro_row.get("ingresos_tarjeta", 0.0),
+                "Ingresos Banco": banco_by_date.get(date) if banco_by_date is not None else None,
                 "Ingresos Efectivo": libro_row.get("ingresos_efectivo", 0.0),
                 "Salidas": libro_row.get("salidas_caja", 0.0),
                 "Retiradas Efectivo": abs(float(libro_row.get("retiradas_efectivo", 0.0) or 0.0)),
@@ -181,6 +256,7 @@ def write_xlsx(records: list[dict[str, Any]], output_path: Path) -> None:
 
     money_columns = {
         "Ingresos Tarjeta",
+        "Ingresos Banco",
         "Ingresos Efectivo",
         "Salidas",
         "Retiradas Efectivo",
@@ -260,16 +336,20 @@ def main() -> None:
 
     libro_path = resolve_optional_path(args.libro, base_dir) or extraer_libro_caja.resolve_input(None, base_dir)
     arqueos_path = resolve_optional_path(args.arqueos, base_dir) or extraer_arqueos.resolve_input(None, base_dir)
+    banco_path = resolve_optional_path(args.banco, base_dir)
     output_path = resolve_optional_path(args.output, base_dir) or (base_dir / "resumen_final_caja_arqueos.xlsx")
 
     libro_rows = extract_libro(libro_path)
     arqueo_rows = extract_arqueos(arqueos_path)
+    banco_by_date = extract_banco(banco_path) if banco_path else None
     validate_same_dates(libro_rows, arqueo_rows)
-    combined_rows = combine_rows(libro_rows, arqueo_rows)
+    combined_rows = combine_rows(libro_rows, arqueo_rows, banco_by_date)
     write_xlsx(combined_rows, output_path)
 
     print(f"Libro de caja: {libro_path}")
     print(f"Arqueos: {arqueos_path}")
+    if banco_path:
+        print(f"Banco: {banco_path}")
     print(f"Dias combinados: {len(combined_rows)}")
     print(f"Salida: {output_path}")
 
