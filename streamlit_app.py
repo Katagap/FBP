@@ -487,6 +487,29 @@ def build_combined_workbook(libro_file: Any, arqueos_file: Any, banco_file: Any 
         return df, output_path.read_bytes()
 
 
+def format_money_value(value: Any) -> str:
+    if pd.isna(value):
+        return "-"
+    try:
+        return f"{float(value):,.2f} €"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def descuadre_color(value: Any) -> str:
+    if pd.isna(value):
+        return ""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if number < 0:
+        return "color: #b42318; font-weight: 700"
+    if number > 0:
+        return "color: #027a48; font-weight: 700"
+    return ""
+
+
 def format_preview(df: pd.DataFrame) -> pd.io.formats.style.Styler:
     styles = []
     for column in df.columns:
@@ -497,11 +520,11 @@ def format_preview(df: pd.DataFrame) -> pd.io.formats.style.Styler:
                     "props": [("font-weight", "650")],
                 }
             )
-    return (
-        df.style.format({column: "{:,.2f} â‚¬" for column in MONEY_COLUMNS})
-        .map(lambda value: "color: #b42318; font-weight: 700" if value < 0 else "color: #027a48; font-weight: 700" if value > 0 else "", subset=["Descuadre"])
-        .set_table_styles(styles)
-    )
+    money_formatters = {column: format_money_value for column in MONEY_COLUMNS if column in df.columns}
+    styler = df.style.format(money_formatters)
+    if "Descuadre" in df.columns:
+        styler = styler.map(descuadre_color, subset=["Descuadre"])
+    return styler.set_table_styles(styles)
 
 
 st.markdown(
